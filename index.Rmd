@@ -1,30 +1,161 @@
 ---
-title: "Practical Machine Learning Course Project"
+title: "Predicting with data on Weight Lifting Exercises"
 author: "Dennis Dondergoor"
-date: "27-4-2018"
+date: "April 29, 2018"
 output: html_document
 ---
+*This project is an assignment for the Johns Hopkins University course [Practical Machine Learning](https://www.coursera.org/learn/practical-machine-learning)*
 
-```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+## Introduction
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from [this website](http://web.archive.org/web/20161224072740/http:/groupware.les.inf.puc-rio.br/har) (see the section on the Weight Lifting Exercise Dataset).
+
+## Assignment
+
+The goal of this project is to predict the manner in which our subjects did the barbell lift exercises correctly. This is the **classe** variable in the training set. We will describe how we built the model, how we used cross validation, what we think the expected out of sample error is.
+
+Finally, we will use the prediction model to predict 20 test cases.
+
+## Downloading and examining the data
+
+First, let's load the required libraries.
+
+```{r, warning = FALSE, message = FALSE}
+library(YaleToolkit)
+library(caret)
+library(parallel)
+library(doParallel)
+set.seed(37)
 ```
 
-## R Markdown
+Let's download the data, from these locations:
 
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+- [https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv](training data);
+- [https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv](testing data).
 
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+```{r}
+train_file <- "pml-training.csv"
+test_file <- "pml-testing.csv"
+train_url <-
+    "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+test_url  <-
+    "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
 
-```{r cars}
-summary(cars)
+if (!file.exists(train_file)) {
+    download.file(train_url, destfile = train_file)
+}
+if (!file.exists(test_file)) {
+    download.file(test_url, destfile = test_file)
+}
+training <- read.csv(train_file)
+testing  <- read.csv(test_file)
+dim(training)
 ```
 
-## Including Plots
+So the training data has 160 variables.
 
-You can also embed plots, for example:
+Now, let's make a table and a plot of the **classe** variable.
 
-```{r pressure, echo=FALSE}
-plot(pressure)
+```{r}
+table(training$classe)
+ggplot(training, aes(classe)) +
+    geom_bar()
 ```
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+# Cleaning up the data
+
+We do not need the first 7 variables, so let's remove them.
+
+```{r}
+training <- training[, -(1:7)]
+```
+
+Let's look at missing data, using the **whatis()** function from the **Yaletoolkit** package.
+
+```{r}
+table(whatis(training)$missing)
+```
+
+This means that variables have either 0 or 19216 missing values, out of 19622 observations. Let's remove the 67 variables that have 19216 values missing.
+
+While we're at it, let's also remove the variables that have Near Zero Variance.
+
+```{r}
+training <- training[, !sapply(training,
+                       function(x) any(is.na(x)))]
+nzv <- nearZeroVar(training)
+training <- training[, -nzv]
+dim(training)
+```
+
+This brings down the number of variables from the original 160 to 53.
+
+## Modeling
+
+To speed things up, let's make use of parallel processing, as suggested in the Discussion Forums of the course.
+
+```{r}
+cluster <- makeCluster(detectCores() - 1)
+registerDoParallel(cluster)
+```
+
+We begin our modeling with a Random Forest model. We will use 5-fold Cross Validation.
+
+```{r}
+fit_control <- trainControl(method = "cv",
+                            number = 5,
+                            allowParallel = TRUE)
+mod_rf <- train(classe ~ .,
+                data = training,
+                method = "rf",
+                trControl = fit_control)
+```
+
+Let's inspect this model.
+
+```{r}
+mod_rf$finalModel
+mod_rf$resample
+mean(mod_rf$resample$Accuracy)
+```
+
+We see a mean accuracy of 99.48% and an Out-of-Bag Estimate Error of 0.41%.
+
+Now, let's try and build a Generalized Boosted Model. (Note that we use the same settings for the **trControl** parameter.)
+
+```{r}
+mod_gbm  <- train(
+    classe ~ .,
+    data = training,
+    method = "gbm",
+    trControl = fit_control,
+    verbose = FALSE
+)
+```
+
+Taking a closer look at the GBM model:
+
+```{r}
+mod_gbm$resample
+mean(mod_gbm$resample$Accuracy)
+confusionMatrix.train(mod_gbm)
+```
+
+The mean accuracy of the GBM model is 96.22%.
+
+Before we proceed, we first stop the parallel processing.
+
+```{r}
+stopCluster(cluster)
+registerDoSEQ()
+```
+
+## Predicting on the test data
+
+Of the two models, the RF model has the bigger accuracy. So we decide to use it for prediction on the test data.
+
+```{r}
+predict(mod_rf, newdata = testing)
+```
+
+After submitting these predicted values of the *classe* variables, all 20 were graded as correct.
